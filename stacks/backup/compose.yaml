@@ -1,0 +1,32 @@
+# Backrest = interface web pour restic (planification, rétention, restauration).
+# Exposition via Pangolin : http://backrest:9898
+# Dépôt de sauvegarde : À METTRE HORS DU SERVEUR (SFTP, S3, Backblaze B2, rclone...), configuré dans l'UI.
+# À sauvegarder : /userdata/infra (dépôt Git + .env + stacks/pangolin/config) et /userdata/data (DATA_ROOT).
+# Conseils : exclure ${DATA_ROOT}/loki (volumineux, reconstructible) ; pour la base SQLite de Pangolin,
+# ajouter un hook "avant sauvegarde" (voir docs/redeploy.md).
+name: backup
+services:
+  backrest:
+    image: garethgeorge/backrest:${BACKREST_TAG:-latest}
+    container_name: backrest
+    hostname: backrest
+    restart: unless-stopped
+    environment:
+      BACKREST_DATA: /data
+      BACKREST_CONFIG: /config/config.json
+      XDG_CACHE_HOME: /cache
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ${DATA_ROOT:?}/backrest/data:/data
+      - ${DATA_ROOT:?}/backrest/config:/config
+      - ${DATA_ROOT:?}/backrest/cache:/cache
+      - ${DATA_ROOT:?}:/userdata/data:ro
+      - ${INFRA_DIR:?}:/userdata/infra:ro
+    security_opt:
+      - no-new-privileges:true
+    networks: [edge]
+
+networks:
+  edge:
+    external: true
+    name: edge

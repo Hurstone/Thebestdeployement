@@ -1,0 +1,6 @@
+# Debian 12 n'a pas /var/log/auth.log par défaut (sans rsyslog) : on lit SSH directement dans journald.
+source: journalctl
+journalctl_filter:
+  - "_SYSTEMD_UNIT=ssh.service"
+labels:
+  type: syslog

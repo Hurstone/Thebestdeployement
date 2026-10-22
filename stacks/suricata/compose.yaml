@@ -1,0 +1,23 @@
+# Suricata en mode IDS (détection, pas de blocage) sur l'interface SURICATA_IFACE.
+# Logs : ${DATA_ROOT}/suricata/logs/eve.json (lus par Alloy -> Loki -> alertes Grafana/Discord)
+# Première fois : make suricata-init (copie la config par défaut dans DATA_ROOT), puis édite
+# ${DATA_ROOT}/suricata/etc/suricata.yaml : HOME_NET (IP publique du serveur) et eve-log.types.
+# Règles : make suricata-rules (à planifier, p. ex. 1x/jour via cron ou timer systemd).
+name: suricata
+services:
+  suricata:
+    image: jasonish/suricata:${SURICATA_TAG:-latest}
+    container_name: suricata
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_NICE
+    environment:
+      TZ: ${TZ:-UTC}
+    command: ["-i", "${SURICATA_IFACE:?Renseigne SURICATA_IFACE dans .env}"]
+    volumes:
+      - ${DATA_ROOT:?}/suricata/etc:/etc/suricata
+      - ${DATA_ROOT:?}/suricata/lib:/var/lib/suricata
+      - ${DATA_ROOT:?}/suricata/logs:/var/log/suricata

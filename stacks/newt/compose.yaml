@@ -1,0 +1,19 @@
+# Newt = connecteur (site) Pangolin local. Il rejoint le réseau "edge" et permet à Pangolin
+# d'atteindre les conteneurs par leur nom (http://grafana:3000, http://portainer:9000, ...).
+# Prérequis : Pangolin installé, site créé dans le dashboard, NEWT_ID / NEWT_SECRET dans .env
+name: newt
+services:
+  newt:
+    image: fosrl/newt:${NEWT_TAG:-latest}
+    container_name: newt
+    restart: unless-stopped
+    environment:
+      PANGOLIN_ENDPOINT: ${PANGOLIN_ENDPOINT:?Renseigne PANGOLIN_ENDPOINT dans .env}
+      NEWT_ID: ${NEWT_ID:?Crée le site dans Pangolin puis renseigne NEWT_ID dans .env}
+      NEWT_SECRET: ${NEWT_SECRET:?Renseigne NEWT_SECRET dans .env}
+    networks: [edge]
+
+networks:
+  edge:
+    external: true
+    name: edge

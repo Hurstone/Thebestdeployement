@@ -1,0 +1,22 @@
+# Portainer : aucun port publié. Exposition uniquement via Pangolin
+# (ressource HTTP -> http://portainer:9000, via le site Newt).
+# PORTAINER_IMAGE = portainer/portainer-ce (Community) ou portainer/portainer-ee (Business, clé de licence).
+name: portainer
+services:
+  portainer:
+    image: ${PORTAINER_IMAGE:-portainer/portainer-ce}:${PORTAINER_TAG:-lts}
+    container_name: portainer
+    restart: unless-stopped
+    # Le TLS est terminé par Traefik (Pangolin) : on active le port HTTP 9000 interne
+    command: ["--http-enabled"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${DATA_ROOT:?}/portainer:/data
+    security_opt:
+      - no-new-privileges:true
+    networks: [edge]
+
+networks:
+  edge:
+    external: true
+    name: edge

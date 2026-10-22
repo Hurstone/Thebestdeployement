@@ -1,0 +1,122 @@
+// Grafana Alloy : collecte -> Loki
+// Labels volontairement peu nombreux (faible cardinalité) ; le reste se filtre en LogQL.
+
+logging {
+  level = "info"
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+  external_labels = {
+    host = constants.hostname,
+  }
+}
+
+// ---------------------------------------------------------------
+// 1) Logs des conteneurs Docker
+// ---------------------------------------------------------------
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "compose_project"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "compose_service"
+  }
+}
+
+loki.source.docker "containers" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.containers.output
+  forward_to = [loki.write.default.receiver]
+  labels     = { job = "docker" }
+}
+
+// ---------------------------------------------------------------
+// 2) journald : SSH (ssh.service), systemd, cron, sudo...
+// ---------------------------------------------------------------
+loki.relabel "journal" {
+  forward_to = []
+
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+  rule {
+    source_labels = ["__journal_syslog_identifier"]
+    target_label  = "syslog_id"
+  }
+}
+
+loki.source.journal "system" {
+  max_age       = "12h"
+  relabel_rules = loki.relabel.journal.rules
+  labels        = { job = "systemd-journal" }
+  forward_to    = [loki.write.default.receiver]
+}
+
+// ---------------------------------------------------------------
+// 3) auditd : modifications de crontab / unités systemd / sshd_config...
+//    (règles dans host/audit/50-infra.rules, clés : cron, systemd_units, sshd_config, ssh_keys, sudoers)
+// ---------------------------------------------------------------
+local.file_match "audit" {
+  path_targets = [{ __path__ = "/var/log/audit/audit.log", job = "auditd" }]
+}
+
+loki.source.file "audit" {
+  targets    = local.file_match.audit.targets
+  forward_to = [loki.write.default.receiver]
+}
+
+// ---------------------------------------------------------------
+// 4) Suricata : on ne garde que les alertes et anomalies (le reste gonfle le stockage)
+// ---------------------------------------------------------------
+local.file_match "suricata" {
+  path_targets = [{ __path__ = "/var/log/suricata/eve.json", job = "suricata" }]
+}
+
+loki.source.file "suricata" {
+  targets    = local.file_match.suricata.targets
+  forward_to = [loki.process.suricata.receiver]
+}
+
+loki.process "suricata" {
+  stage.json {
+    expressions = { event_type = "event_type" }
+  }
+  stage.labels {
+    values = { event_type = "" }
+  }
+  stage.match {
+    selector = `{job="suricata", event_type!~"alert|anomaly"}`
+    action   = "drop"
+  }
+  forward_to = [loki.write.default.receiver]
+}
+
+// ---------------------------------------------------------------
+// 5) (Optionnel) Logs d'accès Traefik de Pangolin
+//    Décommente après avoir monté le dossier dans compose.yaml :
+//    - ../pangolin/config/traefik/logs:/var/log/traefik:ro
+// ---------------------------------------------------------------
+// local.file_match "traefik" {
+//   path_targets = [{ __path__ = "/var/log/traefik/*.log", job = "traefik" }]
+// }
+// loki.source.file "traefik" {
+//   targets    = local.file_match.traefik.targets
+//   forward_to = [loki.write.default.receiver]
+// }

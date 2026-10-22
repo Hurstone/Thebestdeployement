@@ -1,0 +1,28 @@
+# Diun : surveille les nouvelles versions des images de tous les conteneurs en cours d'exécution
+# et notifie sur Discord (salon "mises à jour"). Ne met RIEN à jour automatiquement.
+# Affiner (par conteneur, via labels) : diun.enable, diun.watch_repo=true, diun.include_tags=^\d+\.\d+\.\d+$
+name: diun
+services:
+  diun:
+    image: crazymax/diun:${DIUN_TAG:-latest}
+    container_name: diun
+    hostname: diun
+    restart: unless-stopped
+    command: serve
+    environment:
+      TZ: ${TZ:-UTC}
+      LOG_LEVEL: info
+      LOG_JSON: "false"
+      DIUN_WATCH_WORKERS: "10"
+      # Toutes les 6 heures
+      DIUN_WATCH_SCHEDULE: "0 */6 * * *"
+      DIUN_WATCH_JITTER: 30s
+      DIUN_WATCH_FIRSTCHECKNOTIF: "false"
+      DIUN_PROVIDERS_DOCKER: "true"
+      DIUN_PROVIDERS_DOCKER_WATCHBYDEFAULT: "true"
+      DIUN_NOTIF_DISCORD_WEBHOOKURL: ${DISCORD_WEBHOOK_UPDATES:?Renseigne DISCORD_WEBHOOK_UPDATES dans .env}
+    volumes:
+      - ${DATA_ROOT:?}/diun:/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    security_opt:
+      - no-new-privileges:true

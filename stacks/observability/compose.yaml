@@ -1,0 +1,69 @@
+# Loki (stockage des logs) + Alloy (collecteur) + Grafana (visualisation + alertes Discord)
+# Sources collectées par Alloy : logs Docker, journald (SSH, systemd...), auditd (crontab...), Suricata (eve.json)
+name: observability
+services:
+  loki:
+    image: grafana/loki:${LOKI_TAG:-3.7.8}
+    container_name: loki
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/config.yaml"]
+    volumes:
+      - ./loki/config.yaml:/etc/loki/config.yaml:ro
+      - ${DATA_ROOT:?}/loki:/loki
+    security_opt:
+      - no-new-privileges:true
+    networks: [obs]
+
+  alloy:
+    image: grafana/alloy:${ALLOY_TAG:-latest}
+    container_name: alloy
+    restart: unless-stopped
+    # root : nécessaire pour lire audit.log et le socket Docker
+    user: "0:0"
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - ${DATA_ROOT:?}/alloy:/var/lib/alloy/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/log/journal:/var/log/journal:ro
+      - /run/log/journal:/run/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
+      - /var/log/audit:/var/log/audit:ro
+      - ${DATA_ROOT:?}/suricata/logs:/var/log/suricata:ro
+    depends_on: [loki]
+    security_opt:
+      - no-new-privileges:true
+    networks: [obs]
+
+  grafana:
+    image: grafana/grafana:${GRAFANA_TAG:-latest}
+    container_name: grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Renseigne GRAFANA_ADMIN_PASSWORD dans .env}
+      GF_SERVER_ROOT_URL: https://${GRAFANA_DOMAIN:?Renseigne GRAFANA_DOMAIN dans .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      # Lu par grafana/provisioning/alerting/contact-points.yaml
+      DISCORD_WEBHOOK_ALERTS: ${DISCORD_WEBHOOK_ALERTS:?Renseigne DISCORD_WEBHOOK_ALERTS dans .env}
+    volumes:
+      - ${DATA_ROOT:?}/grafana:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on: [loki]
+    security_opt:
+      - no-new-privileges:true
+    # obs : parle à Loki ; edge : joignable par Newt (ressource Pangolin -> http://grafana:3000)
+    networks: [obs, edge]
+
+networks:
+  obs:
+    driver: bridge
+  edge:
+    external: true
+    name: edge

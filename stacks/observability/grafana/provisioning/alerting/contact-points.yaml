@@ -1,0 +1,11 @@
+# Point de contact Discord ; l'URL vient de la variable d'environnement DISCORD_WEBHOOK_ALERTS
+apiVersion: 1
+contactPoints:
+  - orgId: 1
+    name: discord-alerts
+    receivers:
+      - uid: discord-alerts
+        type: discord
+        settings:
+          url: ${DISCORD_WEBHOOK_ALERTS}
+          use_discord_username: false

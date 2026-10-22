@@ -1,0 +1,28 @@
+# ntopng (édition Community). L'image embarque son propre Redis (lancé par /run.sh), pas de service Redis séparé.
+# Mode "host" obligatoire pour voir les interfaces réseau de l'hôte (ens3...).
+# L'interface web n'écoute QUE sur la passerelle du réseau edge (EDGE_GATEWAY:3000) :
+# inaccessible depuis Internet, joignable par Newt -> ressource Pangolin http://172.30.0.1:3000
+# Au premier login : admin / admin -> change le mot de passe immédiatement.
+# Plusieurs interfaces : ajoute des paires "-i" <iface> dans command.
+name: ntopng
+services:
+  ntopng:
+    image: ntop/ntopng:${NTOPNG_TAG:-stable}
+    container_name: ntopng
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      TZ: ${TZ:-UTC}
+    command:
+      - -i
+      - ${NTOPNG_IFACE:?Renseigne NTOPNG_IFACE dans .env}
+      - -w
+      - ${EDGE_GATEWAY:-172.30.0.1}:3000
+    volumes:
+      # Volumes nommés : l'image gère elle-même les droits (Redis tourne sous un utilisateur dédié)
+      - ntopng_data:/var/lib/ntopng
+      - ntopng_redis:/var/lib/redis
+
+volumes:
+  ntopng_data:
+  ntopng_redis:
