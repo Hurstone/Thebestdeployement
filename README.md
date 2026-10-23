@@ -35,7 +35,7 @@ infra/
 
 ## Ordre d'installation
 1. **Socle** : Debian à jour, SSH durci (ton port), pare-feu (ouvrir 80/tcp, 443/tcp, 51820/udp, 21820/udp + ton port SSH), Docker + Compose, DNS (`pangolin.<domaine>` + wildcard `*.<domaine>` vers le serveur).
-2. `git clone <ton dépôt> /opt/infra && cd /opt/infra && cp .env.example .env && chmod 600 .env` puis remplis `.env` (webhooks Discord, mot de passe Grafana, domaines…).
+2. `git clone https://github.com/Hurstone/Thebestdeployement /opt/infra && cd /opt/infra && cp .env.example .env && chmod 600 .env` puis remplis `.env` (webhooks Discord, mot de passe Grafana, domaines…).
 3. `make init` : dossiers de données, réseau `edge`, journald persistant, auditd, logrotate.
 4. `make pangolin` puis `sudo ./installer` (dans `stacks/pangolin`, **Oui à CrowdSec**). Compte admin + 2FA. Crée un **site Docker** → copie `NEWT_ID` / `NEWT_SECRET` dans `.env`.
 5. `make up-newt up-portainer`, puis crée les ressources Pangolin (tableau ci-dessous). Portainer est alors joignable avec authentification.
