@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+# infra-status : tableau de bord de l'hôte.
+# Affiché à l'ouverture d'une session SSH (via /etc/profile.d) et utilisable à tout moment :
+#   infra-status [--short] [--no-color]
+# Chaque commande a un délai maximum : l'affichage ne peut pas bloquer une connexion.
+set -u
+
+INFRA_DIR="${INFRA_DIR:-/opt/infra}"
+T=4
+
+SHORT=0
+COLOR=1
+for a in "$@"; do
+  case "$a" in
+    --short) SHORT=1 ;;
+    --no-color) COLOR=0 ;;
+  esac
+done
+[ -t 1 ] || COLOR=0
+[ -z "${NO_COLOR:-}" ] || COLOR=0
+
+if [ "$COLOR" -eq 1 ]; then
+  R=$'\e[31m'; G=$'\e[32m'; Y=$'\e[33m'; B=$'\e[1m'; D=$'\e[2m'; N=$'\e[0m'
+else
+  R=''; G=''; Y=''; B=''; D=''; N=''
+fi
+
+have()  { command -v "$1" >/dev/null 2>&1; }
+run()   { timeout "$T" "$@" 2>/dev/null; }
+title() { printf '\n%s== %s ==%s\n' "$B" "$1" "$N"; }
+ok()    { printf '  %s✔%s %s\n' "$G" "$N" "$1"; }
+warn()  { printf '  %s!%s %s\n' "$Y" "$N" "$1"; }
+bad()   { printf '  %s✘%s %s\n' "$R" "$N" "$1"; }
+note()  { printf '    %s%s%s\n' "$D" "$1" "$N"; }
+
+# DATA_ROOT lu dans .env sans le "sourcer" (lecture seule, aucune exécution)
+DATA_ROOT=""
+if [ -r "$INFRA_DIR/.env" ]; then
+  DATA_ROOT=$(grep -E '^DATA_ROOT=' "$INFRA_DIR/.env" | tail -n1 | cut -d= -f2- | tr -d "\"'")
+fi
+DATA_ROOT="${DATA_ROOT:-/srv/infra-data}"
+
+# cscli demande les droits root
+CS=(cscli)
+[ "$(id -u)" -eq 0 ] || CS=(sudo -n cscli)
+
+# ---------------------------------------------------------------- en-tête
+printf '%s%s%s  %s\n' "$B" "$(hostname)" "$N" "$(uptime -p 2>/dev/null)"
+mem=$(free -h 2>/dev/null | awk '/^Mem:/ {print $3"/"$2}')
+dsk=$(df -h / 2>/dev/null | awk 'NR==2 {print $3"/"$2" ("$5")"}')
+printf '  charge %s | RAM %s | disque / %s\n' "$(cut -d' ' -f1-3 /proc/loadavg)" "${mem:-?}" "${dsk:-?}"
+
+# ---------------------------------------------------------------- conteneurs
+title "Conteneurs"
+CONTAINERS=""
+DOCKER_OK=0
+if have docker && CONTAINERS=$(run docker ps --format '{{.Names}}'); then DOCKER_OK=1; fi
+has_ctr() { printf '%s\n' "$CONTAINERS" | grep -qx "$1"; }
+
+if [ "$DOCKER_OK" -eq 1 ]; then
+  n=$(printf '%s\n' "$CONTAINERS" | grep -c .)
+  ok "$n actifs : $(printf '%s\n' "$CONTAINERS" | sort | paste -sd' ' -)"
+  probs=$(run docker ps -a --filter status=exited --filter status=restarting --filter status=dead \
+          --format '{{.Names}} ({{.Status}})')
+  unh=$(run docker ps --filter health=unhealthy --format '{{.Names}}')
+  [ -z "$probs" ] || printf '%s\n' "$probs" | while IFS= read -r l; do bad "à vérifier : $l"; done
+  [ -z "$unh" ]   || printf '%s\n' "$unh"   | while IFS= read -r l; do bad "unhealthy : $l"; done
+  if has_ctr newt; then
+    f=$(run docker logs newt --since 30m 2>&1 | grep -c 'Periodic ping failed' || true)
+    if [ "${f:-0}" -eq 0 ]; then ok "Newt : tunnel stable (0 échec de ping / 30 min)"
+    else warn "Newt : $f échecs de ping / 30 min (tunnel instable ?)"; fi
+  else
+    bad "Newt : conteneur absent (aucune ressource Pangolin ne fonctionne)"
+  fi
+else
+  warn "docker inaccessible (droits ? groupe docker)"
+fi
+
+# ---------------------------------------------------------------- CrowdSec
+title "CrowdSec"
+if have cscli; then
+  for svc in crowdsec crowdsec-firewall-bouncer; do
+    if systemctl is-active --quiet "$svc" 2>/dev/null; then ok "$svc actif"; else bad "$svc INACTIF"; fi
+  done
+  if dec=$(run "${CS[@]}" decisions list -o raw); then
+    rows=$(printf '%s\n' "$dec" | grep -E '^"?[0-9]+"?,' || true)
+    cnt=$(printf '%s\n' "$rows" | grep -c . || true)
+    al=$(run "${CS[@]}" alerts list --since 24h -o raw | grep -cE '^"?[0-9]+"?,' || true)
+    bn=$(run "${CS[@]}" bouncers list -o raw | tail -n +2 | grep -c . || true)
+    ok "$cnt bannissements actifs | ${al:-0} alertes / 24 h"
+    if [ "${bn:-0}" -eq 0 ]; then bad "aucun bouncer enregistré : les bans ne sont PAS appliqués"
+    else ok "$bn bouncer(s) enregistré(s)"; fi
+    if [ "$cnt" -gt 0 ]; then
+      printf '%s\n' "$rows" | head -5 | awk -F, '{gsub(/"/,""); printf "    %-18s %-28s %s\n", $3, $4, $6}'
+      [ "$cnt" -le 5 ] || note "… et $((cnt - 5)) autres (cscli decisions list)"
+    fi
+  else
+    warn "cscli inaccessible (root ou sudo sans mot de passe requis)"
+  fi
+else
+  warn "cscli non installé"
+fi
+
+# ---------------------------------------------------------------- SSH
+title "SSH (24 h)"
+if have journalctl; then
+  lg=$(run journalctl -u ssh.service --since "-24h" --no-pager -q -o short-iso)
+  fail=$(printf '%s\n' "$lg" | grep -cE 'Failed password|Invalid user' || true)
+  acc=$(printf '%s\n' "$lg" | grep -c 'Accepted' || true)
+  if [ "${fail:-0}" -gt 50 ]; then warn "${fail} échecs de connexion"; else ok "${fail:-0} échecs de connexion"; fi
+  ok "${acc:-0} connexions réussies"
+  printf '%s\n' "$lg" | grep 'Accepted' | tail -3 | \
+    awk '{gsub(/T/," ",$1); printf "    %s  %s depuis %s (%s)\n", substr($1,6,11), $7, $9, $5}'
+else
+  warn "journalctl indisponible"
+fi
+
+# ---------------------------------------------------------------- Suricata
+title "Suricata"
+if [ "$DOCKER_OK" -eq 1 ]; then
+  if has_ctr suricata; then ok "conteneur actif"; else bad "conteneur ARRÊTÉ"; fi
+fi
+eve="$DATA_ROOT/suricata/logs/eve.json"
+if [ -r "$eve" ]; then
+  tot=$(run grep -c '"event_type":"alert"' "$eve" || true)
+  hi=$(run grep '"event_type":"alert"' "$eve" | grep -c '"severity":1[,}]' || true)
+  if [ "${hi:-0}" -gt 0 ]; then warn "${tot:-0} alertes dans eve.json dont ${hi} de sévérité 1"
+  else ok "${tot:-0} alertes dans eve.json (aucune de sévérité 1)"; fi
+  last=$(run grep '"event_type":"alert"' "$eve" | tail -1 | sed -nE 's/.*"signature":"([^"]*)".*/\1/p')
+  [ -z "$last" ] || note "dernière : $last"
+else
+  note "eve.json illisible (droits root requis) ou absent"
+fi
+
+# ---------------------------------------------------------------- système
+title "Système"
+upg=$(run apt-get -s upgrade | grep -c '^Inst' || true)
+if [ "${upg:-0}" -gt 0 ]; then warn "$upg mises à jour apt disponibles"; else ok "système à jour"; fi
+[ ! -f /var/run/reboot-required ] || warn "redémarrage requis"
+pct=$(df / 2>/dev/null | awk 'NR==2 {gsub("%","",$5); print $5}')
+[ "${pct:-0}" -lt 85 ] || bad "disque / à ${pct}%"
+
+# ---------------------------------------------------------------- aide-mémoire
+if [ "$SHORT" -eq 0 ]; then
+  title "Aide-mémoire"
+  tip() { printf '  %-40s %s\n' "$1" "$2"; }
+  tip "cscli decisions list" "bans actifs"
+  tip "cscli decisions delete --ip <IP>" "débannir"
+  tip "cscli decisions add --ip <IP> -d 4h" "bannir"
+  tip "cscli alerts list | cscli metrics" "alertes récentes | statistiques"
+  tip "nft list ruleset | grep -i crowdsec" "règles pare-feu actives"
+  tip "docker logs -f newt" "tunnel Pangolin"
+  tip "journalctl -u ssh -f" "connexions SSH en direct"
+  tip "make -C $INFRA_DIR ps" "état des conteneurs"
+  tip "make -C $INFRA_DIR suricata-rules" "mettre à jour les règles Suricata"
+  tip "infra-status [--short]" "ce tableau de bord"
+fi
+printf '\n'
